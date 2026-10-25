@@ -1,41 +1,71 @@
-# AutoMind AI
+# 🤖 AutoMind AI
 
-AutoMind AI is a personal Python project designed to help users organize workflows, manage tasks, track progress, and generate simple reports.
+**Your Personal AI-Powered Office Productivity Assistant**
 
-## Features
+AutoMind AI is a Python-based productivity application designed to simplify everyday office work. It combines workflow management, AI-powered assistance, project coordination, document preparation, IT support, and data reporting in one interactive dashboard.
 
-- Create and manage workflows
-- Track task completion
-- View workflow progress
-- Generate text reports
-- Export workflow data to CSV
-- Simple interactive dashboard
+## ✨ Features
 
-## Technologies Used
+- **AI Assistant:** Get AI-powered help with everyday office tasks and professional writing.
+- **Workflow Management:** Create, organize, prioritize, and track workflows.
+- **Office Administration:** Draft letters, reports, summaries, and other office documents.
+- **Project Coordination:** Organize project activities and prepare project plans.
+- **IT Support:** Get troubleshooting guidance and manage helpdesk tasks.
+- **Data Analysis:** Upload CSV files, preview data, and request AI-assisted analysis.
+- **Report Export:** Download supported reports and data in convenient formats.
+- **Interactive Dashboard:** Monitor tasks and progress in a simple interface.
+
+## 🛠️ Technologies Used
 
 - Python
 - Streamlit
-- CSV
+- Google Gemini API
+- Pandas
+- SQLite
+- Python-docx
+- ReportLab
+- OpenPyXL
 - Git and GitHub
 
-## Project Status
+## 🚀 Getting Started
 
-This is a learning and portfolio project. The current version uses predefined templates and workflow logic. It does not yet integrate a generative AI model.
-
-## Run Locally
+### Run Locally
 
 1. Install Python.
-2. Download or clone this repository.
-3. Install dependencies:
+2. Clone or download this repository.
+3. Install the required dependencies:
 
-   `pip install -r requirements.txt`
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-4. Start the application:
+4. Configure your Gemini API key securely using an environment variable or Streamlit Secrets. Never publish your API key in the repository.
+5. Start the application:
 
-   `streamlit run app.py`
+   ```bash
+   streamlit run app.py
+   ```
 
-## Author
+## 🔐 API Configuration
 
-Zulqarnain Khan Jadoon
+The AI assistant requires a valid Google Gemini API key. Configure it securely in Streamlit Secrets:
+
+```toml
+GEMINI_API_KEY = "your-gemini-api-key"
+```
+
+Replace the placeholder with your own API key. Keep the actual key private and never commit it to GitHub.
+
+## 📌 Project Status
+
+AutoMind AI is a personal learning and portfolio project under development. Features and integrations may evolve as the project improves. AI-generated results should be reviewed before professional use.
+
+**Note:** Local database files and application data may not persist across restarts on some cloud hosting platforms unless persistent storage is configured.
+
+## 👨‍💻 Author
+
+**Zulqarnain Khan Jadoon**
 
 GitHub: https://github.com/zulqarnainjadoon99
+
+Repository: https://github.com/zulqarnainjadoon99/AutoMind-AI
