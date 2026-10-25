@@ -4,3 +4,4 @@ google-genai
 python-docx
 reportlab
 openpyxl
+python-pptx
