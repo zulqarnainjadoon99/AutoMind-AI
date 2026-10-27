@@ -1,20 +1,19 @@
-
 # 🤖 AutoMind AI
-### Your Personal AI-Powered Office Productivity Assistant
+### Your Personal AI-Powered Office Productivity & Management Suite
 
-AutoMind AI is an AI-powered productivity application built with Python and Streamlit. It brings office productivity, AI assistance, project coordination, document creation, workflow management, and data analysis together in one dashboard.
+AutoMind AI is a Python and Streamlit-based productivity platform designed to bring AI assistance, office administration, document generation, project planning, workflow tracking, and IT support together in one workspace.
 
-## ✨ Key Features
+## ✨ Features
 
-- 🤖 **Gemini AI Assistant** — AI-powered writing, summaries, explanations, and everyday office assistance.
-- 📝 **Office Administration** — Prepare letters, reports, meeting notes, and professional documents.
-- 📄 **Word & PDF Tools** — Generate downloadable Word documents and PDF reports.
-- 📊 **PowerPoint Maker** — Create PowerPoint presentation files.
+- 🤖 **AI Assistant** — Draft content, summarize information, explain concepts, and support everyday office tasks using Google Gemini.
+- 📝 **Office Administration** — Prepare professional letters, reports, meeting notes, and other office documents.
+- 📄 **Word & PDF Generator** — Create downloadable Word documents and PDF reports.
+- 📊 **PowerPoint Maker** — Generate presentation files for meetings, projects, and professional use.
 - 📈 **Excel & CSV Tools** — Upload, preview, analyze, and export spreadsheet data.
-- 📋 **Workflow Manager** — Create tasks, set priorities, and track completion.
-- 📅 **Project Planner** — Organize project activities and planning tasks.
-- 🛠️ **IT Support Assistant** — Get AI-guided troubleshooting and technical explanations.
-- 📊 **Productivity Dashboard** — Review workflows and monitor task progress.
+- 📋 **Workflow Manager** — Create tasks, assign priorities, and track progress.
+- 📅 **Project Planner** — Organize project activities and monitor planned work.
+- 🛠️ **IT Support Assistant** — Get AI-guided troubleshooting suggestions and technical explanations.
+- 📊 **Productivity Dashboard** — Review task status and monitor productivity.
 
 ## 🛠️ Technology Stack
 
@@ -31,41 +30,59 @@ AutoMind AI is an AI-powered productivity application built with Python and Stre
 
 ## 🚀 Getting Started
 
-### Run Locally
+### 1. Get the Project
 
-1. Install Python.
-2. Clone this repository or download the source files.
-3. Install the dependencies:
+Clone the repository:
 
-   `pip install -r requirements.txt`
+```bash
+git clone https://github.com/zulqarnainjadoon99/AutoMind-AI.git
+cd AutoMind-AI
+```
 
-4. Configure your Gemini API key securely using Streamlit Secrets or an environment variable.
-5. Start the application:
+### 2. Install Dependencies
 
-   `streamlit run app.py`
+Make sure Python is installed, then run:
 
-## 🔐 Gemini API Configuration
+```bash
+pip install -r requirements.txt
+```
 
-The AI features require a valid Google Gemini API key.
+### 3. Configure the Gemini API Key
 
-For Streamlit Cloud, open your app's **Settings → Secrets** and configure:
+Create a `.streamlit/secrets.toml` file locally with the following content:
 
 ```toml
 GEMINI_API_KEY = "your-gemini-api-key"
 ```
 
-Replace the placeholder with your own key in Streamlit Secrets. Never publish your actual API key in GitHub or share it publicly.
+Replace the placeholder with your own API key. Never commit this file or publish your actual key.
+
+### 4. Run the Application
+
+```bash
+streamlit run app.py
+```
+
+Open the local URL displayed in your terminal.
+
+## 🔐 Security & Data Notes
+
+- Keep API keys and other secrets out of source code and public repositories.
+- Review AI-generated content before using it professionally.
+- SQLite data persistence depends on the hosting environment and storage configuration.
+- Do not upload confidential documents or personal information unless you understand how the service processes them.
 
 ## 📌 Project Status
 
-AutoMind AI is a personal learning and portfolio project under active development. Available features depend on the current application code and configuration. AI-generated content should be reviewed before professional use.
-
-**Note:** SQLite data may not persist across application restarts or redeployments on cloud hosting unless persistent storage is configured.
+AutoMind AI is a personal learning and portfolio project under active development. Features and availability depend on the current application code, installed dependencies, and API configuration.
 
 ## 👨‍💻 Author
 
 **Zulqarnain Khan Jadoon**
 
-GitHub: https://github.com/zulqarnainjadoon99
+- GitHub Profile: https://github.com/zulqarnainjadoon99
+- Project Repository: https://github.com/zulqarnainjadoon99/AutoMind-AI
 
-Project Repository: https://github.com/zulqarnainjadoon99/AutoMind-AI
+---
+
+*Built with Python, Streamlit, and Google Gemini to support smarter office productivity and project coordination.*
