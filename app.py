@@ -57,6 +57,53 @@ def init_db():
             if name not in columns:
                 conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {kind}")
 
+        # Additional AutoMind AI modules. CREATE IF NOT EXISTS preserves existing data.
+        conn.execute("""CREATE TABLE IF NOT EXISTS students (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL, roll_no TEXT, institution TEXT,
+            class_name TEXT, guardian TEXT, phone TEXT, academic_year TEXT,
+            created TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS school_staff (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL, role TEXT, institution TEXT,
+            phone TEXT, joined TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL, attendance_date TEXT NOT NULL,
+            status TEXT NOT NULL, notes TEXT,
+            UNIQUE(student_id, attendance_date),
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS fee_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL, amount REAL NOT NULL,
+            fee_month TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Unpaid',
+            paid_date TEXT, notes TEXT,
+            FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS business_employees (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            full_name TEXT NOT NULL, department TEXT, job_title TEXT,
+            phone TEXT, email TEXT, status TEXT DEFAULT 'Active',
+            created TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS business_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            record_type TEXT NOT NULL, title TEXT NOT NULL,
+            amount REAL DEFAULT 0, record_date TEXT,
+            person TEXT, notes TEXT, created TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS agent_memory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory TEXT NOT NULL, created TEXT
+        )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS agent_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL, message TEXT NOT NULL, created TEXT
+        )""")
+
 
 def get_tasks():
     with connect() as conn:
@@ -267,7 +314,8 @@ with st.sidebar:
     st.subheader("Workspace")
     page = st.radio("Choose a Tool", [
         "Dashboard", "AI Assistant", "Word & PDF Documents", "PowerPoint Maker",
-        "Excel & Data Tools", "Workflow Manager", "Project Planner", "IT Support"
+        "Excel & Data Tools", "Workflow Manager", "Project Planner", "IT Support",
+        "School & College Management", "Office & Business Management", "Personal AI Agent"
     ])
     st.divider()
     st.caption("Keep API keys in Streamlit Secrets or environment variables.")
@@ -536,6 +584,327 @@ elif page == "IT Support":
         st.download_button("Download Troubleshooting Guide", answer,
                            "it_troubleshooting.txt", "text/plain", key="download_it")
 
+
+
+
+elif page == "School & College Management":
+    st.header("🏫 School & College Management")
+    st.caption("Basic student, staff, attendance and fee records. Keep backups and verify records before official use.")
+    school_tab = st.tabs(["Students", "School Staff", "Attendance", "Fees"])
+    with school_tab[0]:
+        st.subheader("Student Admissions & Records")
+        with st.form("student_admission_form", clear_on_submit=True):
+            s_name = st.text_input("Student full name *")
+            s_roll = st.text_input("Roll number")
+            s_institution = st.text_input("School / College name")
+            s_class = st.text_input("Class / Grade")
+            s_guardian = st.text_input("Parent / Guardian")
+            s_phone = st.text_input("Contact number")
+            s_year = st.text_input("Academic year", value=str(date.today().year))
+            s_submit = st.form_submit_button("Save Student")
+            if s_submit:
+                if not s_name.strip():
+                    st.warning("Student ka naam zaroori hai.")
+                else:
+                    try:
+                        with connect() as conn:
+                            conn.execute("""INSERT INTO students
+                                (full_name, roll_no, institution, class_name, guardian, phone, academic_year, created)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (s_name.strip(), s_roll.strip(), s_institution.strip(), s_class.strip(),
+                                 s_guardian.strip(), s_phone.strip(), s_year.strip(),
+                                 datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                        st.success("Student record save ho gaya.")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Student record save nahi ho saka.")
+        with connect() as conn:
+            students_df = pd.read_sql_query("SELECT * FROM students ORDER BY id DESC", conn)
+        st.dataframe(students_df, use_container_width=True, hide_index=True)
+        if not students_df.empty:
+            st.download_button("Export Students CSV", students_df.to_csv(index=False).encode("utf-8-sig"),
+                               "automind_students.csv", "text/csv", key="export_students")
+    with school_tab[1]:
+        st.subheader("School / College Staff")
+        with st.form("school_staff_form", clear_on_submit=True):
+            ss_name = st.text_input("Staff full name *")
+            ss_role = st.text_input("Role / Designation")
+            ss_institution = st.text_input("School / College")
+            ss_phone = st.text_input("Phone")
+            ss_submit = st.form_submit_button("Add Staff Member")
+            if ss_submit:
+                if not ss_name.strip():
+                    st.warning("Staff ka naam zaroori hai.")
+                else:
+                    with connect() as conn:
+                        conn.execute("INSERT INTO school_staff (full_name, role, institution, phone, joined) VALUES (?, ?, ?, ?, ?)",
+                                     (ss_name.strip(), ss_role.strip(), ss_institution.strip(), ss_phone.strip(),
+                                      datetime.now().astimezone().strftime("%Y-%m-%d")))
+                    st.success("Staff record save ho gaya.")
+                    st.rerun()
+        with connect() as conn:
+            school_staff_df = pd.read_sql_query("SELECT * FROM school_staff ORDER BY id DESC", conn)
+        st.dataframe(school_staff_df, use_container_width=True, hide_index=True)
+        if not school_staff_df.empty:
+            st.download_button("Export School Staff CSV", school_staff_df.to_csv(index=False).encode("utf-8-sig"),
+                               "automind_school_staff.csv", "text/csv", key="export_school_staff")
+    with school_tab[2]:
+        st.subheader("Daily Attendance")
+        with connect() as conn:
+            attendance_students = pd.read_sql_query("SELECT id, full_name, roll_no, class_name FROM students ORDER BY full_name", conn)
+        if attendance_students.empty:
+            st.info("Attendance mark karne se pehle Students tab mein student add karein.")
+        else:
+            student_labels = {f"{r.full_name} | Roll: {r.roll_no or '-'} | Class: {r.class_name or '-'}": int(r.id)
+                              for r in attendance_students.itertuples()}
+            with st.form("attendance_form", clear_on_submit=True):
+                student_label = st.selectbox("Student", list(student_labels.keys()))
+                att_date = st.date_input("Attendance date", value=date.today())
+                att_status = st.selectbox("Status", ["Present", "Absent", "Late", "Leave"])
+                att_notes = st.text_input("Notes (optional)")
+                att_submit = st.form_submit_button("Save Attendance")
+                if att_submit:
+                    try:
+                        with connect() as conn:
+                            conn.execute("""INSERT INTO attendance (student_id, attendance_date, status, notes)
+                                VALUES (?, ?, ?, ?) ON CONFLICT(student_id, attendance_date)
+                                DO UPDATE SET status=excluded.status, notes=excluded.notes""",
+                                (student_labels[student_label], att_date.isoformat(), att_status, att_notes.strip()))
+                        st.success("Attendance save ho gayi.")
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Attendance save failed")
+                        st.error("Attendance save nahi ho saki.")
+            with connect() as conn:
+                att_df = pd.read_sql_query("""SELECT a.id, s.full_name, s.roll_no, s.class_name,
+                    a.attendance_date, a.status, a.notes FROM attendance a
+                    JOIN students s ON s.id=a.student_id ORDER BY a.attendance_date DESC, s.full_name""", conn)
+            st.dataframe(att_df, use_container_width=True, hide_index=True)
+            if not att_df.empty:
+                st.download_button("Export Attendance CSV", att_df.to_csv(index=False).encode("utf-8-sig"),
+                                   "automind_attendance.csv", "text/csv", key="export_attendance")
+    with school_tab[3]:
+        st.subheader("Fee Records")
+        with connect() as conn:
+            fee_students = pd.read_sql_query("SELECT id, full_name, roll_no FROM students ORDER BY full_name", conn)
+        if fee_students.empty:
+            st.info("Fees record karne se pehle student add karein.")
+        else:
+            fee_labels = {f"{r.full_name} | Roll: {r.roll_no or '-'}": int(r.id) for r in fee_students.itertuples()}
+            with st.form("fee_form", clear_on_submit=True):
+                fee_student = st.selectbox("Student for fee", list(fee_labels.keys()))
+                fee_month = st.text_input("Fee month (e.g. 2026-10)")
+                fee_amount = st.number_input("Amount", min_value=0.0, step=500.0)
+                fee_status = st.selectbox("Payment status", ["Unpaid", "Paid", "Partially Paid"])
+                fee_paid_date = st.date_input("Paid date", value=date.today(), disabled=fee_status != "Paid")
+                fee_notes = st.text_input("Fee notes")
+                fee_submit = st.form_submit_button("Save Fee Record")
+                if fee_submit:
+                    if not fee_month.strip():
+                        st.warning("Fee month enter karein.")
+                    else:
+                        with connect() as conn:
+                            conn.execute("""INSERT INTO fee_records
+                                (student_id, amount, fee_month, status, paid_date, notes)
+                                VALUES (?, ?, ?, ?, ?, ?)""",
+                                (fee_labels[fee_student], float(fee_amount), fee_month.strip(), fee_status,
+                                 fee_paid_date.isoformat() if fee_status == "Paid" else None, fee_notes.strip()))
+                        st.success("Fee record save ho gaya.")
+                        st.rerun()
+            with connect() as conn:
+                fees_df = pd.read_sql_query("""SELECT f.id, s.full_name, s.roll_no, f.amount,
+                    f.fee_month, f.status, f.paid_date, f.notes FROM fee_records f
+                    JOIN students s ON s.id=f.student_id ORDER BY f.id DESC""", conn)
+            st.dataframe(fees_df, use_container_width=True, hide_index=True)
+            if not fees_df.empty:
+                st.download_button("Export Fees CSV", fees_df.to_csv(index=False).encode("utf-8-sig"),
+                                   "automind_fees.csv", "text/csv", key="export_fees")
+
+
+elif page == "Office & Business Management":
+    st.header("🏢 Office & Business Management")
+    st.caption("Manage employee records, meetings, expenses and business notes.")
+    office_tab = st.tabs(["Employees", "Meetings & Records", "Expenses", "Reports"])
+    with office_tab[0]:
+        st.subheader("Employee Directory")
+        with st.form("business_employee_form", clear_on_submit=True):
+            emp_name = st.text_input("Employee full name *")
+            emp_dept = st.text_input("Department")
+            emp_title = st.text_input("Job title")
+            emp_phone = st.text_input("Phone")
+            emp_email = st.text_input("Email")
+            emp_status = st.selectbox("Employment status", ["Active", "On Leave", "Inactive"])
+            emp_submit = st.form_submit_button("Save Employee")
+            if emp_submit:
+                if not emp_name.strip():
+                    st.warning("Employee ka naam zaroori hai.")
+                else:
+                    with connect() as conn:
+                        conn.execute("""INSERT INTO business_employees
+                            (full_name, department, job_title, phone, email, status, created)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                            (emp_name.strip(), emp_dept.strip(), emp_title.strip(), emp_phone.strip(),
+                             emp_email.strip(), emp_status, datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                    st.success("Employee record save ho gaya.")
+                    st.rerun()
+        with connect() as conn:
+            emp_df = pd.read_sql_query("SELECT * FROM business_employees ORDER BY id DESC", conn)
+        st.dataframe(emp_df, use_container_width=True, hide_index=True)
+        if not emp_df.empty:
+            st.download_button("Export Employees CSV", emp_df.to_csv(index=False).encode("utf-8-sig"),
+                               "automind_employees.csv", "text/csv", key="export_employees")
+    with office_tab[1]:
+        st.subheader("Meetings & Business Records")
+        with st.form("business_record_form", clear_on_submit=True):
+            rec_type = st.selectbox("Record type", ["Meeting", "Office Task", "Project Note", "Other"])
+            rec_title = st.text_input("Title / Subject *")
+            rec_date = st.date_input("Date", value=date.today())
+            rec_person = st.text_input("Responsible person / attendee")
+            rec_notes = st.text_area("Details / Minutes / Notes")
+            rec_submit = st.form_submit_button("Save Record")
+            if rec_submit:
+                if not rec_title.strip():
+                    st.warning("Title zaroori hai.")
+                else:
+                    with connect() as conn:
+                        conn.execute("""INSERT INTO business_records
+                            (record_type, title, record_date, person, notes, created)
+                            VALUES (?, ?, ?, ?, ?, ?)""",
+                            (rec_type, rec_title.strip(), rec_date.isoformat(), rec_person.strip(),
+                             rec_notes.strip(), datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                    st.success("Record save ho gaya.")
+                    st.rerun()
+        with connect() as conn:
+            rec_df = pd.read_sql_query("SELECT * FROM business_records WHERE record_type != 'Expense' ORDER BY id DESC", conn)
+        st.dataframe(rec_df, use_container_width=True, hide_index=True)
+        if not rec_df.empty:
+            st.download_button("Export Business Records CSV", rec_df.to_csv(index=False).encode("utf-8-sig"),
+                               "automind_business_records.csv", "text/csv", key="export_business_records")
+    with office_tab[2]:
+        st.subheader("Expense Tracker")
+        with st.form("business_expense_form", clear_on_submit=True):
+            expense_title = st.text_input("Expense title *")
+            expense_amount = st.number_input("Amount", min_value=0.0, step=100.0)
+            expense_date = st.date_input("Expense date", value=date.today())
+            expense_person = st.text_input("Paid by / vendor")
+            expense_notes = st.text_input("Notes")
+            expense_submit = st.form_submit_button("Save Expense")
+            if expense_submit:
+                if not expense_title.strip():
+                    st.warning("Expense title zaroori hai.")
+                else:
+                    with connect() as conn:
+                        conn.execute("""INSERT INTO business_records
+                            (record_type, title, amount, record_date, person, notes, created)
+                            VALUES ('Expense', ?, ?, ?, ?, ?, ?)""",
+                            (expense_title.strip(), float(expense_amount), expense_date.isoformat(),
+                             expense_person.strip(), expense_notes.strip(),
+                             datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                    st.success("Expense save ho gaya.")
+                    st.rerun()
+        with connect() as conn:
+            expense_df = pd.read_sql_query("SELECT id, title, amount, record_date, person, notes FROM business_records WHERE record_type='Expense' ORDER BY record_date DESC", conn)
+        st.dataframe(expense_df, use_container_width=True, hide_index=True)
+        if not expense_df.empty:
+            st.metric("Total Recorded Expenses", f"{expense_df['amount'].sum():,.2f}")
+            st.download_button("Export Expenses CSV", expense_df.to_csv(index=False).encode("utf-8-sig"),
+                               "automind_expenses.csv", "text/csv", key="export_expenses")
+    with office_tab[3]:
+        with connect() as conn:
+            report_emp = pd.read_sql_query("SELECT department, COUNT(*) AS employees FROM business_employees GROUP BY department", conn)
+            report_exp = pd.read_sql_query("SELECT substr(record_date,1,7) AS month, SUM(amount) AS total_expenses FROM business_records WHERE record_type='Expense' GROUP BY substr(record_date,1,7) ORDER BY month DESC", conn)
+            report_records = pd.read_sql_query("SELECT record_type, COUNT(*) AS records FROM business_records GROUP BY record_type", conn)
+        st.subheader("Management Reports")
+        st.write("Employees by department")
+        st.dataframe(report_emp, use_container_width=True, hide_index=True)
+        st.write("Expenses by month")
+        st.dataframe(report_exp, use_container_width=True, hide_index=True)
+        st.write("Business records by type")
+        st.dataframe(report_records, use_container_width=True, hide_index=True)
+
+
+elif page == "Personal AI Agent":
+    st.header("🧑‍💻 Personal AI Agent")
+    st.caption("A personal workspace for planning, writing, remembering notes and turning requests into tracked tasks.")
+    st.warning("The agent only performs actions implemented in this app. It does not independently access email, files, or external accounts.")
+    agent_tab = st.tabs(["Chat with Agent", "Saved Memory", "My Tasks"])
+    with agent_tab[0]:
+        with connect() as conn:
+            history = pd.read_sql_query("SELECT role, message, created FROM agent_messages ORDER BY id DESC LIMIT 30", conn)
+        history = history.iloc[::-1] if not history.empty else history
+        for row in history.itertuples():
+            with st.chat_message("assistant" if row.role == "assistant" else "user"):
+                st.markdown(row.message)
+        agent_prompt = st.chat_input("Ask your personal agent in Urdu, Roman Urdu or English...")
+        if agent_prompt:
+            with connect() as conn:
+                conn.execute("INSERT INTO agent_messages (role, message, created) VALUES (?, ?, ?)",
+                             ("user", agent_prompt, datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                memories_df = pd.read_sql_query("SELECT memory FROM agent_memory ORDER BY id DESC LIMIT 15", conn)
+                recent_df = pd.read_sql_query("SELECT role, message FROM agent_messages ORDER BY id DESC LIMIT 12", conn)
+            memory_text = "\n".join(f"- {m}" for m in memories_df["memory"].tolist()) if not memories_df.empty else "No saved memories."
+            context_text = "\n".join(f"{r['role']}: {r['message']}" for _, r in recent_df.iloc[::-1].iterrows())
+            with st.spinner("Personal AI Agent is thinking..."):
+                agent_answer = ask_ai(
+                    "You are the user's personal AI agent inside AutoMind AI. Be practical, transparent, "
+                    "and respond in the user's language. Use the saved memory only as context, not as "
+                    "verified truth. You can suggest and draft actions but must not claim external actions "
+                    "were performed. If asked to create a task, clearly offer a task title and details; "
+                    "do not insert a task unless the user uses the task form.\n\n"
+                    f"Saved memory:\n{memory_text}\n\nRecent conversation:\n{context_text}\n\n"
+                    f"Current request:\n{agent_prompt}",
+                    "Personal AI Agent")
+            with connect() as conn:
+                conn.execute("INSERT INTO agent_messages (role, message, created) VALUES (?, ?, ?)",
+                             ("assistant", agent_answer, datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+            st.rerun()
+    with agent_tab[1]:
+        st.subheader("Saved Personal Memory")
+        st.caption("Save only non-sensitive preferences or notes. Do not store passwords, API keys or private secrets.")
+        with st.form("agent_memory_form", clear_on_submit=True):
+            memory_entry = st.text_area("Memory / preference / project note")
+            memory_submit = st.form_submit_button("Save Memory")
+            if memory_submit:
+                if not memory_entry.strip():
+                    st.warning("Memory text enter karein.")
+                else:
+                    with connect() as conn:
+                        conn.execute("INSERT INTO agent_memory (memory, created) VALUES (?, ?)",
+                                     (memory_entry.strip(), datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")))
+                    st.success("Memory saved.")
+                    st.rerun()
+        with connect() as conn:
+            memory_df = pd.read_sql_query("SELECT * FROM agent_memory ORDER BY id DESC", conn)
+        st.dataframe(memory_df, use_container_width=True, hide_index=True)
+        if not memory_df.empty:
+            delete_memory_id = st.number_input("Memory ID to delete", min_value=0, step=1, value=0)
+            if st.button("Delete selected memory", key="delete_agent_memory"):
+                with connect() as conn:
+                    conn.execute("DELETE FROM agent_memory WHERE id=?", (int(delete_memory_id),))
+                st.success("If that ID existed, the memory was deleted.")
+                st.rerun()
+    with agent_tab[2]:
+        st.subheader("Create and track a task")
+        with st.form("agent_task_form", clear_on_submit=True):
+            agent_task_title = st.text_input("Task title")
+            agent_task_category = st.selectbox("Category", ["Personal", "Office", "School / College", "Project", "Other"])
+            agent_task_priority = st.selectbox("Priority", ["Low", "Medium", "High"])
+            agent_task_description = st.text_area("Task details")
+            agent_task_submit = st.form_submit_button("Add Task")
+            if agent_task_submit:
+                if agent_task_title.strip():
+                    try:
+                        add_task(agent_task_title, agent_task_category, agent_task_priority, agent_task_description)
+                        st.success("Task added to Workflow Manager.")
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Agent task creation failed")
+                        st.error("Task add nahi ho saka.")
+                else:
+                    st.warning("Task title enter karein.")
+        with connect() as conn:
+            agent_tasks = pd.read_sql_query("SELECT * FROM tasks ORDER BY id DESC LIMIT 50", conn)
+        st.dataframe(agent_tasks, use_container_width=True, hide_index=True)
 
 st.divider()
 st.caption("AutoMind AI | Python • Streamlit • Gemini • Word • PowerPoint • Excel")
