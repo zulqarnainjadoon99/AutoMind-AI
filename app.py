@@ -1,32 +1,41 @@
-
-import streamlit as st
-import pandas as pd
+import os
+import logging
 import sqlite3
 from datetime import datetime, date
 from io import BytesIO
 from pathlib import Path
 from xml.sax.saxutils import escape
+
+import pandas as pd
+import streamlit as st
 from google import genai
 
-st.set_page_config(
-    page_title="AutoMind AI",
-    page_icon="🤖",
-    layout="wide"
-)
+st.set_page_config(page_title="AutoMind AI", page_icon="🤖", layout="wide")
 
-DB = Path(__file__).with_name("automind.db")
+APP_DIR = Path(__file__).resolve().parent
+DB = Path(os.environ.get("AUTOMIND_DB_PATH", str(APP_DIR / "automind.db")))
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
+MAX_UPLOAD_MB = 20
+MAX_AI_SAMPLE_ROWS = 100
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("automind")
 
 
 # ---------- DATABASE ----------
 
 def connect():
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 15000")
     return conn
 
 
 def init_db():
+    DB.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,34 +47,44 @@ def init_db():
                 created TEXT
             )
         """)
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(tasks)")}
+        # Add missing columns only; do not delete or reset existing records.
+        for name, kind in [
+            ("category", "TEXT"), ("priority", "TEXT"),
+            ("description", "TEXT"), ("status", "TEXT DEFAULT 'Pending'"),
+            ("created", "TEXT")
+        ]:
+            if name not in columns:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {kind}")
 
 
 def get_tasks():
     with connect() as conn:
-        return pd.read_sql_query(
-            "SELECT * FROM tasks ORDER BY id DESC", conn
-        )
+        return pd.read_sql_query("SELECT * FROM tasks ORDER BY id DESC", conn)
 
 
 def add_task(title, category, priority, description):
+    title = str(title or "").strip()
+    if not title:
+        raise ValueError("Task name cannot be empty.")
+    if priority not in {"Low", "Medium", "High"}:
+        raise ValueError("Invalid priority.")
     with connect() as conn:
         conn.execute(
-            """INSERT INTO tasks
-            (title, category, priority, description, status, created)
-            VALUES (?, ?, ?, ?, 'Pending', ?)""",
-            (
-                title, category, priority, description,
-                datetime.now().strftime("%Y-%m-%d %H:%M")
-            )
+            """INSERT INTO tasks (title, category, priority, description, status, created)
+               VALUES (?, ?, ?, ?, 'Pending', ?)""",
+            (title, category, priority, str(description or "").strip(),
+             datetime.now().astimezone().strftime("%Y-%m-%d %H:%M"))
         )
 
 
 def change_task(task_id, status):
+    if status not in {"Pending", "In Progress", "Completed"}:
+        raise ValueError("Invalid task status.")
     with connect() as conn:
-        conn.execute(
-            "UPDATE tasks SET status=? WHERE id=?",
-            (status, int(task_id))
-        )
+        cur = conn.execute("UPDATE tasks SET status=? WHERE id=?", (status, int(task_id)))
+        if cur.rowcount == 0:
+            raise ValueError("Task not found.")
 
 
 def remove_task(task_id):
@@ -73,524 +92,413 @@ def remove_task(task_id):
         conn.execute("DELETE FROM tasks WHERE id=?", (int(task_id),))
 
 
-init_db()
+try:
+    init_db()
+except Exception:
+    logger.exception("Database initialization failed")
+    st.error("Database initialize nahi ho saka. Database path aur permissions check karein.")
+    st.stop()
 
 
 # ---------- GEMINI AI ----------
 
-try:
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
-except Exception:
-    api_key = ""
+def get_api_key():
+    try:
+        secret = st.secrets.get("GEMINI_API_KEY", "")
+        if secret:
+            return str(secret).strip()
+    except Exception:
+        pass
+    return os.environ.get("GEMINI_API_KEY", "").strip()
 
-ai_client = genai.Client(api_key=api_key) if api_key else None
+
+@st.cache_resource
+def make_client(key):
+    return genai.Client(api_key=key) if key else None
 
 
 def ask_ai(prompt, mode="Office Assistant"):
-    if not ai_client:
+    prompt = str(prompt or "").strip()
+    if not prompt:
+        return "Please enter a request first."
+    key = get_api_key()
+    if not key:
         return (
-            "Gemini API key configured nahi hai. Streamlit app ke "
-            "Settings > Secrets mein ye add karein:\n\n"
-            'GEMINI_API_KEY = "your-private-api-key"\n\n'
-            "Apni asli API key GitHub par share na karein."
+            "Gemini API key configure nahi hai. Streamlit Secrets mein "
+            '`GEMINI_API_KEY = "your-private-api-key"` add karein, ya environment '
+            "variable set karein. Asli API key GitHub par upload na karein."
         )
-
     instructions = f"""
-You are AutoMind AI, a helpful professional office assistant.
+You are AutoMind AI, a professional office productivity assistant.
 Current mode: {mode}.
-
-Help with office administration, professional writing, project
-coordination, IT support, presentations, spreadsheets and planning.
-Respond in the language the user uses, including Urdu or Roman Urdu.
-Use clear headings and practical steps. Never invent facts or claim
-you have performed external actions. Mark unknown details as placeholders.
+Help with office administration, professional writing, project coordination,
+IT support, presentations, spreadsheets and planning. Respond in the user's
+language, including Urdu or Roman Urdu. Use clear headings and practical steps.
+Never invent facts or claim you performed external actions. Use placeholders for
+missing details.
 
 User request:
 {prompt}
 """
     try:
-        response = ai_client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=instructions
+        response = make_client(key).models.generate_content(
+            model=MODEL_NAME, contents=instructions
         )
-        return response.text or "AI se jawab nahi mila. Dobara try karein."
-    except Exception as error:
+        return getattr(response, "text", None) or "AI se jawab nahi mila. Dobara try karein."
+    except Exception:
+        logger.exception("Gemini request failed")
         return (
-            "Gemini request failed. API key, quota aur model access "
-            "check karein.\n\n" + str(error)[:400]
+            "Gemini request complete nahi ho saki. API key, internet connection, "
+            "quota aur model access check karein. Detailed error server logs mein hai; "
+            "API key kisi ke saath share na karein."
         )
 
 
-# ---------- WORD EXPORT ----------
+# ---------- EXPORT HELPERS ----------
 
 def create_word(title, content):
-    from docx import Document
-
+    try:
+        from docx import Document
+    except ImportError as exc:
+        raise RuntimeError("Word export ke liye python-docx install karein.") from exc
     doc = Document()
-    doc.add_heading(title, 0)
-
-    for line in content.splitlines():
+    doc.add_heading(str(title)[:200], 0)
+    for line in str(content).splitlines():
         line = line.strip()
-        if line.startswith("## "):
-            doc.add_heading(line[3:], level=1)
-        elif line.startswith("### "):
+        if line.startswith("### "):
             doc.add_heading(line[4:], level=2)
-        elif line.startswith("- "):
+        elif line.startswith("## "):
+            doc.add_heading(line[3:], level=1)
+        elif line.startswith(("- ", "* ")):
             doc.add_paragraph(line[2:], style="List Bullet")
+        elif line.startswith(("1. ", "1) ")):
+            doc.add_paragraph(line[3:], style="List Number")
         elif line:
             doc.add_paragraph(line)
+    out = BytesIO()
+    doc.save(out)
+    return out.getvalue()
 
-    output = BytesIO()
-    doc.save(output)
-    return output.getvalue()
-
-
-# ---------- PDF EXPORT ----------
 
 def create_pdf(title, content):
-    from reportlab.lib.pagesizes import A4
-    from reportlab.platypus import (
-        SimpleDocTemplate, Paragraph, Spacer
-    )
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import inch
-
-    output = BytesIO()
-    pdf = SimpleDocTemplate(
-        output, pagesize=A4,
-        rightMargin=45, leftMargin=45,
-        topMargin=45, bottomMargin=45
-    )
+    try:
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+        from reportlab.lib.styles import getSampleStyleSheet
+    except ImportError as exc:
+        raise RuntimeError("PDF export ke liye reportlab install karein.") from exc
+    out = BytesIO()
+    pdf = SimpleDocTemplate(out, pagesize=A4, rightMargin=45, leftMargin=45,
+                            topMargin=45, bottomMargin=45)
     styles = getSampleStyleSheet()
-    story = [Paragraph(escape(title), styles["Title"]), Spacer(1, 16)]
-
-    for line in content.splitlines():
+    story = [Paragraph(escape(str(title)), styles["Title"]), Spacer(1, 16)]
+    for line in str(content).splitlines():
         line = line.strip()
         if not line:
             story.append(Spacer(1, 7))
         elif line.startswith("## "):
-            story.append(
-                Paragraph(escape(line[3:]), styles["Heading1"])
-            )
+            story.append(Paragraph(escape(line[3:]), styles["Heading1"]))
         elif line.startswith("### "):
-            story.append(
-                Paragraph(escape(line[4:]), styles["Heading2"])
-            )
-        elif line.startswith("- "):
-            story.append(
-                Paragraph("&#8226; " + escape(line[2:]), styles["BodyText"])
-            )
+            story.append(Paragraph(escape(line[4:]), styles["Heading2"]))
+        elif line.startswith(("- ", "* ")):
+            story.append(Paragraph("&#8226; " + escape(line[2:]), styles["BodyText"]))
         else:
             story.append(Paragraph(escape(line), styles["BodyText"]))
             story.append(Spacer(1, 5))
-
     pdf.build(story)
-    return output.getvalue()
+    return out.getvalue()
 
-
-# ---------- POWERPOINT EXPORT ----------
 
 def create_powerpoint(title, content):
-    from pptx import Presentation
-    from pptx.util import Inches, Pt
-
+    try:
+        from pptx import Presentation
+        from pptx.util import Inches, Pt
+    except ImportError as exc:
+        raise RuntimeError("PowerPoint export ke liye python-pptx install karein.") from exc
     prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
-
-    slide = prs.slides.add_slide(prs.slide_layouts[0])
-    slide.shapes.title.text = title
-    slide.placeholders[1].text = "Created with AutoMind AI"
-
-    sections = []
-    heading = "Overview"
-    points = []
-
-    for line in content.splitlines():
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    first = prs.slides.add_slide(prs.slide_layouts[0])
+    first.shapes.title.text = str(title)[:200]
+    if len(first.placeholders) > 1:
+        first.placeholders[1].text = "Created with AutoMind AI"
+    sections, heading, points = [], "Overview", []
+    for line in str(content).splitlines():
         line = line.strip()
         if line.startswith("## "):
             if points:
                 sections.append((heading, points))
-            heading = line[3:]
-            points = []
+            heading, points = line[3:][:100], []
         elif line.startswith(("- ", "* ")):
             points.append(line[2:])
         elif line:
             points.append(line)
-
     if points:
         sections.append((heading, points))
-
+    if not sections:
+        sections = [("Content", ["No slide content was generated."])]
     for heading, bullets in sections:
         slide = prs.slides.add_slide(prs.slide_layouts[1])
         slide.shapes.title.text = heading[:100]
         frame = slide.placeholders[1].text_frame
         frame.clear()
-
         for i, bullet in enumerate(bullets[:7]):
-            paragraph = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
-            paragraph.text = bullet[:400]
-            paragraph.font.size = Pt(22)
+            p = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
+            p.text = str(bullet)[:400]
+            p.font.size = Pt(22)
+    out = BytesIO()
+    prs.save(out)
+    return out.getvalue()
 
-    output = BytesIO()
-    prs.save(output)
-    return output.getvalue()
+
+def safe_download(label, factory, file_name, mime, key):
+    try:
+        st.download_button(label, data=factory(), file_name=file_name, mime=mime, key=key)
+    except Exception as exc:
+        logger.exception("Export failed")
+        st.error(str(exc) if isinstance(exc, RuntimeError) else
+                 "File export nahi ho saki. Dependencies aur deployment logs check karein.")
 
 
-# ---------- APP NAVIGATION ----------
+# ---------- NAVIGATION ----------
 
 st.title("🤖 AutoMind AI")
 st.caption("Your AI-Powered Office Productivity Workspace")
-
-page = st.sidebar.radio(
-    "Choose a Tool",
-    [
-        "Dashboard",
-        "AI Assistant",
-        "Word & PDF Documents",
-        "PowerPoint Maker",
-        "Excel & Data Tools",
-        "Workflow Manager",
-        "Project Planner",
-        "IT Support"
-    ]
-)
+with st.sidebar:
+    st.subheader("Workspace")
+    page = st.radio("Choose a Tool", [
+        "Dashboard", "AI Assistant", "Word & PDF Documents", "PowerPoint Maker",
+        "Excel & Data Tools", "Workflow Manager", "Project Planner", "IT Support"
+    ])
+    st.divider()
+    st.caption("Keep API keys in Streamlit Secrets or environment variables.")
 
 tasks = get_tasks()
 
 
-# ---------- DASHBOARD ----------
-
 if page == "Dashboard":
     st.header("📊 Office Dashboard")
-
     total = len(tasks)
     completed = int((tasks["status"] == "Completed").sum()) if total else 0
-    pending = total - completed
-
-    a, b, c = st.columns(3)
+    pending = int((tasks["status"] != "Completed").sum()) if total else 0
+    progress = int((tasks["status"] == "In Progress").sum()) if total else 0
+    a, b, c, d = st.columns(4)
     a.metric("Total Tasks", total)
     b.metric("Completed", completed)
-    c.metric("Pending", pending)
-
+    c.metric("In Progress", progress)
+    d.metric("Pending", pending)
     st.progress(completed / total if total else 0,
                 text=f"Completion: {completed / total:.0%}" if total else "No tasks yet")
-
     st.subheader("Recent Tasks")
     if total:
-        st.dataframe(tasks, use_container_width=True, hide_index=True)
+        st.dataframe(tasks.head(20), use_container_width=True, hide_index=True)
     else:
-        st.info("Sidebar se pehla task create karein.")
-
+        st.info("Workflow Manager mein pehla task create karein.")
     st.info(
-        "Note: Cloud hosting par local database ka data restarts ke "
-        "baad persist karna guaranteed nahi. Reliable storage ke liye "
-        "persistent ya external database configure karein."
+        "SQLite data us server/disk par save hota hai jahan app run hoti hai. Kuch cloud "
+        "hosts restart/deploy par local files delete kar sakte hain. Production ke liye "
+        "persistent disk ya managed database configure karein."
     )
 
-
-# ---------- AI ASSISTANT ----------
 
 elif page == "AI Assistant":
     st.header("🧠 Gemini AI Assistant")
-
-    mode = st.selectbox(
-        "Work Type",
-        [
-            "Office Assistant", "Professional Writing",
-            "Project Management", "IT Support",
-            "Presentation Content", "Excel Help", "Daily Planner"
-        ]
-    )
-
-    prompt = st.text_area(
-        "Aap kya kaam karwana chahte hain?",
-        height=180,
-        placeholder="Misal: Create a professional office meeting report..."
-    )
-
-    if st.button("Generate with AI", type="primary"):
+    mode = st.selectbox("Work Type", [
+        "Office Assistant", "Professional Writing", "Project Management",
+        "IT Support", "Presentation Content", "Excel Help", "Daily Planner"
+    ])
+    prompt = st.text_area("Aap kya kaam karwana chahte hain?", height=180,
+                          placeholder="Misal: Create a professional office meeting report...")
+    if st.button("Generate with AI", type="primary", key="generate_ai"):
         if prompt.strip():
             with st.spinner("AutoMind AI is working..."):
-                answer = ask_ai(prompt, mode)
-            st.session_state["ai_answer"] = answer
-
+                st.session_state["ai_answer"] = ask_ai(prompt, mode)
+        else:
+            st.warning("Pehle apni request enter karein.")
     if st.session_state.get("ai_answer"):
-        answer = st.session_state["ai_answer"]
-        st.markdown(answer)
-        st.download_button(
-            "Download Answer as TXT",
-            answer,
-            file_name="automind_ai_answer.txt",
-            mime="text/plain"
-        )
+        st.markdown(st.session_state["ai_answer"])
+        st.download_button("Download Answer as TXT", st.session_state["ai_answer"],
+                           "automind_ai_answer.txt", "text/plain", key="download_ai_answer")
 
-
-# ---------- WORD AND PDF ----------
 
 elif page == "Word & PDF Documents":
     st.header("📝 Word & PDF Document Maker")
-
-    doc_type = st.selectbox(
-        "Document Type",
-        [
-            "Official Letter", "Job Application",
-            "Professional Email", "Office Report",
-            "Meeting Minutes", "Meeting Agenda",
-            "Office Memo", "Notice", "CV Content", "Other"
-        ]
-    )
-
-    language = st.selectbox(
-        "Language", ["English", "Urdu", "Roman Urdu", "Bilingual"]
-    )
-
-    details = st.text_area(
-        "Purpose, names, dates and other details",
-        height=180
-    )
-
-    if st.button("Create Document", type="primary"):
+    doc_type = st.selectbox("Document Type", [
+        "Official Letter", "Job Application", "Professional Email", "Office Report",
+        "Meeting Minutes", "Meeting Agenda", "Office Memo", "Notice", "CV Content", "Other"
+    ])
+    language = st.selectbox("Language", ["English", "Urdu", "Roman Urdu", "Bilingual"])
+    details = st.text_area("Purpose, names, dates and other details", height=180)
+    if st.button("Create Document", type="primary", key="create_document"):
         if details.strip():
             with st.spinner("Drafting document..."):
-                answer = ask_ai(
-                    f"Create a {doc_type} in {language}. "
-                    "Use only the provided facts. Use placeholders "
-                    "for missing information.\n\n" + details,
+                st.session_state["document_answer"] = ask_ai(
+                    f"Create a {doc_type} in {language}. Use only provided facts and "
+                    f"placeholders for missing information.\n\n{details}",
                     "Professional Writing"
                 )
-            st.session_state["document_answer"] = answer
-            st.session_state["document_title"] = doc_type
-
+                st.session_state["document_title"] = doc_type
+        else:
+            st.warning("Document ki details enter karein.")
     if st.session_state.get("document_answer"):
         answer = st.session_state["document_answer"]
         title = st.session_state.get("document_title", "Office Document")
-
         st.subheader("Document Preview")
         st.markdown(answer)
+        safe_download("Download Word (.docx)", lambda: create_word(title, answer),
+                      "office_document.docx",
+                      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                      "word_download")
+        safe_download("Download PDF", lambda: create_pdf(title, answer),
+                      "office_document.pdf", "application/pdf", "pdf_download")
+        st.download_button("Download TXT", answer, "office_document.txt",
+                           "text/plain", key="txt_document_download")
 
-        st.download_button(
-            "Download Word (.docx)",
-            create_word(title, answer),
-            file_name="office_document.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
-
-        st.download_button(
-            "Download PDF",
-            create_pdf(title, answer),
-            file_name="office_document.pdf",
-            mime="application/pdf"
-        )
-
-        st.download_button(
-            "Download TXT",
-            answer,
-            file_name="office_document.txt",
-            mime="text/plain"
-        )
-
-
-# ---------- POWERPOINT MAKER ----------
 
 elif page == "PowerPoint Maker":
     st.header("📽️ AI PowerPoint Presentation Maker")
-
     topic = st.text_input("Presentation Topic")
     audience = st.text_input("Audience (e.g. students, staff, management)")
     slide_count = st.slider("Number of content slides", 3, 15, 6)
-    language = st.selectbox(
-        "Presentation Language", ["English", "Urdu", "Roman Urdu"]
-    )
+    language = st.selectbox("Presentation Language", ["English", "Urdu", "Roman Urdu"])
     extra = st.text_area("Extra instructions (optional)")
-
-    if st.button("Generate Presentation", type="primary"):
+    if st.button("Generate Presentation", type="primary", key="generate_ppt"):
         if topic.strip():
             prompt = f"""
-Create PowerPoint content for a presentation about: {topic}
+Create PowerPoint content about: {topic}
 Audience: {audience or 'General audience'}
 Language: {language}
-Create exactly about {slide_count} content slides.
-
-IMPORTANT FORMAT:
-Start with an introduction section.
-Use a line beginning with ## for each slide heading.
+Create approximately {slide_count} content slides.
+Start with an introduction. Use a line beginning with ## for each slide heading.
 Under each heading write 3 to 5 concise bullet points beginning with - .
-Include a conclusion and practical takeaways.
-Add speaker notes in a short separate bullet when useful.
+Include a conclusion and practical takeaways. Do not use a ## heading for title slide.
 Extra instructions: {extra}
-Do not use a ## heading for the title slide.
 """
             with st.spinner("Generating slide content..."):
-                answer = ask_ai(prompt, "Presentation Content")
-            st.session_state["ppt_answer"] = answer
+                st.session_state["ppt_answer"] = ask_ai(prompt, "Presentation Content")
             st.session_state["ppt_title"] = topic
         else:
             st.warning("Presentation topic enter karein.")
-
     if st.session_state.get("ppt_answer"):
         answer = st.session_state["ppt_answer"]
         title = st.session_state.get("ppt_title", "Presentation")
-
         st.subheader("Presentation Content Preview")
         st.markdown(answer)
+        safe_download("Download PowerPoint (.pptx)", lambda: create_powerpoint(title, answer),
+                      "automind_presentation.pptx",
+                      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                      "ppt_download")
+        st.download_button("Download Slide Content (.txt)", answer,
+                           "presentation_content.txt", "text/plain", key="ppt_txt_download")
 
-        st.download_button(
-            "Download PowerPoint (.pptx)",
-            create_powerpoint(title, answer),
-            file_name="automind_presentation.pptx",
-            mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        )
-
-        st.download_button(
-            "Download Slide Content (.txt)",
-            answer,
-            file_name="presentation_content.txt",
-            mime="text/plain"
-        )
-
-
-# ---------- EXCEL AND DATA ----------
 
 elif page == "Excel & Data Tools":
     st.header("📈 Excel & CSV Data Tools")
-
-    uploaded = st.file_uploader(
-        "Upload Excel or CSV file",
-        type=["xlsx", "csv"]
-    )
-
+    st.caption("AI analysis sends up to 100 rows of the file to Gemini. Remove confidential or personal data first.")
+    uploaded = st.file_uploader("Upload Excel or CSV file", type=["xlsx", "csv"])
     if uploaded:
-        try:
-            if uploaded.name.lower().endswith(".csv"):
-                df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_excel(uploaded)
-
-            st.write(f"Rows: {len(df)} | Columns: {len(df.columns)}")
-            st.dataframe(df.head(500), use_container_width=True)
-
-            x, y = st.columns(2)
-
-            x.download_button(
-                "Download CSV",
-                df.to_csv(index=False).encode("utf-8"),
-                file_name="automind_data.csv",
-                mime="text/csv"
-            )
-
-            excel_buffer = BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                df.to_excel(writer, index=False, sheet_name="Data")
-
-            y.download_button(
-                "Download Excel (.xlsx)",
-                excel_buffer.getvalue(),
-                file_name="automind_data.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-            if st.button("Analyze Data with AI"):
-                sample = df.head(100).to_csv(index=False)
-                with st.spinner("Analyzing sample..."):
-                    answer = ask_ai(
-                        "Analyze this CSV sample. Explain the columns, "
-                        "visible trends, possible data quality issues and "
-                        "useful next steps. State that only a sample was "
-                        "provided if the file has more than 100 rows.\n\n"
-                        + sample,
-                        "Excel Help"
-                    )
-                st.markdown(answer)
-
-        except Exception as error:
-            st.error(f"File could not be read: {error}")
-
+        if uploaded.size > MAX_UPLOAD_MB * 1024 * 1024:
+            st.error(f"File {MAX_UPLOAD_MB} MB se bari hai. Chhoti file upload karein.")
+        else:
+            try:
+                if uploaded.name.lower().endswith(".csv"):
+                    df = pd.read_csv(uploaded, nrows=100000)
+                else:
+                    df = pd.read_excel(uploaded, nrows=100000)
+                st.write(f"Rows loaded: {len(df)} | Columns: {len(df.columns)}")
+                st.dataframe(df.head(500), use_container_width=True)
+                left, right = st.columns(2)
+                left.download_button("Download CSV", df.to_csv(index=False).encode("utf-8-sig"),
+                                     "automind_data.csv", "text/csv", key="export_csv")
+                excel_buffer = BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+                    df.to_excel(writer, index=False, sheet_name="Data")
+                right.download_button("Download Excel (.xlsx)", excel_buffer.getvalue(),
+                                      "automind_data.xlsx",
+                                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                      key="export_xlsx")
+                if st.button("Analyze Data with AI", key="analyze_data"):
+                    sample = df.head(MAX_AI_SAMPLE_ROWS).to_csv(index=False)
+                    with st.spinner("Analyzing sample..."):
+                        st.session_state["excel_ai_answer"] = ask_ai(
+                            "Analyze this CSV sample: explain columns, visible trends, possible "
+                            "data-quality issues and useful next steps. State clearly that only "
+                            f"{min(len(df), MAX_AI_SAMPLE_ROWS)} rows were provided.\n\n{sample}",
+                            "Excel Help"
+                        )
+                if st.session_state.get("excel_ai_answer"):
+                    st.markdown(st.session_state["excel_ai_answer"])
+            except Exception:
+                logger.exception("Uploaded file could not be read")
+                st.error("File read nahi ho saki. Format, file integrity aur dependencies check karein.")
     st.subheader("Excel Formula Helper")
     goal = st.text_area("What do you want to calculate in Excel?")
-
-    if st.button("Suggest Formula"):
+    if st.button("Suggest Formula", key="suggest_formula"):
         if goal.strip():
-            st.markdown(ask_ai(goal, "Excel Help"))
+            with st.spinner("Preparing formula..."):
+                st.session_state["formula_answer"] = ask_ai(goal, "Excel Help")
         else:
             st.warning("Calculation describe karein.")
+    if st.session_state.get("formula_answer"):
+        st.markdown(st.session_state["formula_answer"])
 
-
-# ---------- WORKFLOW MANAGER ----------
 
 elif page == "Workflow Manager":
     st.header("📋 Workflow Manager")
-
     with st.form("task_form", clear_on_submit=True):
         title = st.text_input("Task / Workflow Name")
-        category = st.selectbox(
-            "Category",
-            [
-                "Project Coordination", "Office Administration",
-                "IT Support", "Report Preparation", "General Tasks"
-            ]
-        )
+        category = st.selectbox("Category", [
+            "Project Coordination", "Office Administration", "IT Support",
+            "Report Preparation", "General Tasks"
+        ])
         priority = st.selectbox("Priority", ["Low", "Medium", "High"])
         description = st.text_area("Description")
         submitted = st.form_submit_button("Create Workflow")
-
         if submitted:
             if title.strip():
-                add_task(title, category, priority, description)
-                st.success("Task created!")
-                st.rerun()
+                try:
+                    add_task(title, category, priority, description)
+                    st.success("Task created!")
+                    st.rerun()
+                except Exception:
+                    logger.exception("Task creation failed")
+                    st.error("Task create nahi ho saka. Input aur database status check karein.")
             else:
                 st.warning("Task name enter karein.")
-
     tasks = get_tasks()
-
     if len(tasks):
         for _, task in tasks.iterrows():
-            with st.expander(f"{task['title']} — {task['priority']}"):
-                st.write("Category:", task["category"])
+            with st.expander(f"{task['title']} — {task['priority'] or 'No priority'}"):
+                st.write("Category:", task["category"] or "Not specified")
                 st.write("Description:", task["description"] or "None")
-                st.write("Created:", task["created"])
-
+                st.write("Created:", task["created"] or "Unknown")
                 statuses = ["Pending", "In Progress", "Completed"]
                 current = task["status"] if task["status"] in statuses else "Pending"
-
-                new_status = st.selectbox(
-                    "Status", statuses,
-                    index=statuses.index(current),
-                    key=f"status_{task['id']}"
-                )
-
-                col1, col2 = st.columns(2)
-
-                if col1.button("Save Status", key=f"save_{task['id']}"):
-                    change_task(task["id"], new_status)
-                    st.rerun()
-
-                if col2.button("Delete Task", key=f"delete_{task['id']}"):
+                status = st.selectbox("Status", statuses, index=statuses.index(current),
+                                      key=f"status_{task['id']}")
+                c1, c2 = st.columns(2)
+                if c1.button("Save Status", key=f"save_{task['id']}"):
+                    try:
+                        change_task(task["id"], status)
+                        st.rerun()
+                    except Exception:
+                        logger.exception("Task status update failed")
+                        st.error("Status update nahi ho saka.")
+                if c2.button("Delete Task", key=f"delete_{task['id']}"):
                     remove_task(task["id"])
                     st.rerun()
-
-        st.download_button(
-            "Export Workflows CSV",
-            tasks.to_csv(index=False).encode("utf-8"),
-            file_name="automind_workflows.csv",
-            mime="text/csv"
-        )
+        st.download_button("Export Workflows CSV", tasks.to_csv(index=False).encode("utf-8-sig"),
+                           "automind_workflows.csv", "text/csv", key="export_workflows")
     else:
         st.info("Abhi koi workflow nahi hai.")
 
 
-# ---------- PROJECT PLANNER ----------
-
 elif page == "Project Planner":
     st.header("🗂️ AI Project Planner")
-
     name = st.text_input("Project Name")
     goal = st.text_area("Project Goal / Scope")
     deadline = st.date_input("Target Deadline", value=date.today())
     resources = st.text_area("Team, budget or available resources")
-
-    if st.button("Create Project Plan", type="primary"):
+    if st.button("Create Project Plan", type="primary", key="create_project_plan"):
         if name.strip() and goal.strip():
             prompt = f"""
 Create a practical project plan.
@@ -598,51 +506,36 @@ Project: {name}
 Goal: {goal}
 Target deadline: {deadline}
 Resources: {resources or 'Not specified'}
-
-Include project summary, phases, milestones, suggested timeline,
-task owners as placeholders, risks and mitigations, and a progress
-report template. Do not invent confirmed commitments.
+Include summary, phases, milestones, suggested timeline, task owners as placeholders,
+risks and mitigations, and a progress report template. Do not invent commitments.
 """
             with st.spinner("Planning project..."):
-                answer = ask_ai(prompt, "Project Management")
-
-            st.markdown(answer)
-            st.download_button(
-                "Download Project Plan",
-                answer,
-                file_name="project_plan.txt",
-                mime="text/plain"
-            )
+                st.session_state["project_answer"] = ask_ai(prompt, "Project Management")
         else:
             st.warning("Project name aur goal enter karein.")
+    if st.session_state.get("project_answer"):
+        answer = st.session_state["project_answer"]
+        st.markdown(answer)
+        st.download_button("Download Project Plan", answer, "project_plan.txt",
+                           "text/plain", key="download_project_plan")
 
-
-# ---------- IT SUPPORT ----------
 
 elif page == "IT Support":
     st.header("🛠️ IT Support Assistant")
-
-    issue = st.text_area(
-        "Describe your computer, Windows, printer, network or software issue",
-        height=160
-    )
-
-    if st.button("Troubleshoot with AI", type="primary"):
+    issue = st.text_area("Describe your computer, Windows, printer, network or software issue",
+                         height=160)
+    if st.button("Troubleshoot with AI", type="primary", key="troubleshoot"):
         if issue.strip():
             with st.spinner("Preparing troubleshooting steps..."):
-                answer = ask_ai(issue, "IT Support")
-            st.markdown(answer)
-            st.download_button(
-                "Download Troubleshooting Guide",
-                answer,
-                file_name="it_troubleshooting.txt",
-                mime="text/plain"
-            )
+                st.session_state["it_answer"] = ask_ai(issue, "IT Support")
         else:
             st.warning("Issue ki details enter karein.")
+    if st.session_state.get("it_answer"):
+        answer = st.session_state["it_answer"]
+        st.markdown(answer)
+        st.download_button("Download Troubleshooting Guide", answer,
+                           "it_troubleshooting.txt", "text/plain", key="download_it")
 
 
 st.divider()
-st.caption(
-    "AutoMind AI | Python • Streamlit • Gemini • Word • PowerPoint • Excel"
-)
+st.caption("AutoMind AI | Python • Streamlit • Gemini • Word • PowerPoint • Excel")
