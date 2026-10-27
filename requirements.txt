@@ -1,7 +1,8 @@
 streamlit
 pandas
 google-genai
-python-docx
-reportlab
 openpyxl
+python-docx
 python-pptx
+reportlab
+Pillow
