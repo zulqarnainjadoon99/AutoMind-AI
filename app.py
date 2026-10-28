@@ -129,24 +129,6 @@ def init_db():
             UNIQUE(student_id, academic_year, fee_month),
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
         )""")
-        # Upgrade older/incompatible fee-ledger schemas additively. Never drop existing records.
-        fee_columns = {r["name"] for r in conn.execute("PRAGMA table_info(school_fee_ledger)")}
-        fee_additions = [
-            ("student_id", "INTEGER"),
-            ("academic_year", "TEXT DEFAULT ''"),
-            ("class_name", "TEXT DEFAULT ''"),
-            ("section", "TEXT DEFAULT ''"),
-            ("roll_no", "TEXT DEFAULT ''"),
-            ("fee_month", "TEXT DEFAULT ''"),
-            ("amount", "REAL DEFAULT 0"),
-            ("paid_amount", "REAL DEFAULT 0"),
-            ("status", "TEXT DEFAULT 'Unpaid'"),
-            ("paid_date", "TEXT"),
-            ("notes", "TEXT"),
-        ]
-        for column_name, column_type in fee_additions:
-            if column_name not in fee_columns:
-                conn.execute(f"ALTER TABLE school_fee_ledger ADD COLUMN {column_name} {column_type}")
         conn.execute("""CREATE TABLE IF NOT EXISTS school_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id INTEGER NOT NULL, academic_year TEXT NOT NULL,
@@ -157,6 +139,41 @@ def init_db():
             UNIQUE(student_id, academic_year, exam_name, subject),
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
         )""")
+        # Backward-compatible schema migration for databases created by older versions.
+        # Add missing columns without deleting or resetting any existing records.
+        fee_columns = {r["name"] for r in conn.execute("PRAGMA table_info(school_fee_ledger)")}
+        for name, kind in [
+            ("student_id", "INTEGER DEFAULT 0"),
+            ("academic_year", "TEXT DEFAULT ''"),
+            ("class_name", "TEXT DEFAULT ''"),
+            ("section", "TEXT DEFAULT ''"),
+            ("roll_no", "TEXT DEFAULT ''"),
+            ("fee_month", "TEXT DEFAULT ''"),
+            ("amount", "REAL DEFAULT 0"),
+            ("paid_amount", "REAL DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'Unpaid'"),
+            ("paid_date", "TEXT"),
+            ("notes", "TEXT"),
+        ]:
+            if name not in fee_columns:
+                conn.execute(f"ALTER TABLE school_fee_ledger ADD COLUMN {name} {kind}")
+
+        result_columns = {r["name"] for r in conn.execute("PRAGMA table_info(school_results)")}
+        for name, kind in [
+            ("student_id", "INTEGER DEFAULT 0"),
+            ("academic_year", "TEXT DEFAULT ''"),
+            ("class_name", "TEXT DEFAULT ''"),
+            ("section", "TEXT DEFAULT ''"),
+            ("roll_no", "TEXT DEFAULT ''"),
+            ("exam_name", "TEXT DEFAULT ''"),
+            ("subject", "TEXT DEFAULT ''"),
+            ("total_marks", "REAL DEFAULT 100"),
+            ("obtained_marks", "REAL DEFAULT 0"),
+            ("remarks", "TEXT"),
+            ("created", "TEXT"),
+        ]:
+            if name not in result_columns:
+                conn.execute(f"ALTER TABLE school_results ADD COLUMN {name} {kind}")
         # Migrate new columns safely for databases created by earlier app versions.
         student_columns = {r["name"] for r in conn.execute("PRAGMA table_info(students)")}
         if "section" not in student_columns:
@@ -909,7 +926,7 @@ elif page == "School & College Management":
                     st.success(f"{fee_month} ki fee entries save/update ho gayi.")
                     st.rerun()
         with connect() as conn:
-            fees_df = pd.read_sql_query("""SELECT academic_year, class_name, section, roll_no, s.full_name, fee_month, amount, paid_amount, (amount-paid_amount) AS balance, status, paid_date, notes FROM school_fee_ledger f JOIN students s ON s.id=f.student_id ORDER BY academic_year DESC, fee_month DESC, class_name, section, CAST(roll_no AS INTEGER)""", conn)
+            fees_df = pd.read_sql_query("""SELECT f.academic_year, f.class_name, f.section, f.roll_no, s.full_name, f.fee_month, f.amount, f.paid_amount, (f.amount-f.paid_amount) AS balance, f.status, f.paid_date, f.notes FROM school_fee_ledger f JOIN students s ON s.id=f.student_id ORDER BY f.academic_year DESC, f.fee_month DESC, f.class_name, f.section, CAST(f.roll_no AS INTEGER)""", conn)
         st.dataframe(fees_df, use_container_width=True, hide_index=True)
         if not fees_df.empty:
             st.download_button("Export all fee records CSV", fees_df.to_csv(index=False).encode("utf-8-sig"), "automind_school_fee_ledger.csv", "text/csv", key="fees_export_v2")
