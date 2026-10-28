@@ -129,6 +129,24 @@ def init_db():
             UNIQUE(student_id, academic_year, fee_month),
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
         )""")
+        # Upgrade older/incompatible fee-ledger schemas additively. Never drop existing records.
+        fee_columns = {r["name"] for r in conn.execute("PRAGMA table_info(school_fee_ledger)")}
+        fee_additions = [
+            ("student_id", "INTEGER"),
+            ("academic_year", "TEXT DEFAULT ''"),
+            ("class_name", "TEXT DEFAULT ''"),
+            ("section", "TEXT DEFAULT ''"),
+            ("roll_no", "TEXT DEFAULT ''"),
+            ("fee_month", "TEXT DEFAULT ''"),
+            ("amount", "REAL DEFAULT 0"),
+            ("paid_amount", "REAL DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'Unpaid'"),
+            ("paid_date", "TEXT"),
+            ("notes", "TEXT"),
+        ]
+        for column_name, column_type in fee_additions:
+            if column_name not in fee_columns:
+                conn.execute(f"ALTER TABLE school_fee_ledger ADD COLUMN {column_name} {column_type}")
         conn.execute("""CREATE TABLE IF NOT EXISTS school_results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id INTEGER NOT NULL, academic_year TEXT NOT NULL,
