@@ -1,9 +1,8 @@
 streamlit
 pandas
 google-genai
-openpyxl
 python-docx
-python-pptx
 reportlab
+python-pptx
+openpyxl
 Pillow
-supabase
