@@ -12,24 +12,41 @@ from google import genai
 
 st.set_page_config(page_title="AutoMind AI", page_icon="🤖", layout="wide")
 
-# Responsive polish for narrow screens. Streamlit widgets remain keyboard-accessible.
+# Responsive layout for desktop, tablets and phones.
 st.markdown("""
 <style>
-.block-container { padding-top: 1.15rem; padding-bottom: 2rem; }
-[data-testid="stMetric"] { padding: .65rem; border: 1px solid rgba(128,128,128,.22); border-radius: .7rem; }
-[data-testid="stDataFrame"] { max-width: 100%; }
-button, [data-testid="stDownloadButton"] button { min-height: 2.6rem; }
-@media (max-width: 768px) {
-  .block-container { padding-left: .75rem; padding-right: .75rem; }
-  h1 { font-size: 1.65rem !important; }
-  h2 { font-size: 1.35rem !important; }
-  h3 { font-size: 1.12rem !important; }
-  [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .55rem; }
-  [data-testid="column"] { min-width: min(100%, 13rem) !important; flex: 1 1 100% !important; }
-  [data-testid="stMetric"] { padding: .5rem; }
-  [data-testid="stDataFrame"] { overflow-x: auto; }
-  [data-testid="stSidebar"] { min-width: 0; }
+:root { color-scheme: light dark; }
+.block-container { max-width: 1500px; padding-top: 1rem; padding-bottom: 2.25rem; }
+[data-testid="stMetric"] { padding: .75rem; border: 1px solid rgba(128,128,128,.25); border-radius: .85rem; }
+[data-testid="stDataFrame"], [data-testid="stTable"] { max-width: 100%; }
+button, [data-testid="stDownloadButton"] button, [data-testid="stFormSubmitButton"] button { min-height: 2.8rem; border-radius: .65rem; }
+input, textarea, [data-baseweb="select"] { border-radius: .55rem !important; }
+[data-testid="stTabs"] button { min-height: 2.7rem; }
+img { max-width: 100%; height: auto; }
+@media (max-width: 900px) {
+  .block-container { padding-left: 1rem; padding-right: 1rem; }
+  [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .65rem; }
+  [data-testid="column"] { min-width: min(100%, 15rem) !important; }
 }
+@media (max-width: 768px) {
+  .block-container { padding: .7rem .7rem 1.5rem .7rem; }
+  h1 { font-size: 1.55rem !important; line-height: 1.25 !important; }
+  h2 { font-size: 1.28rem !important; line-height: 1.3 !important; }
+  h3 { font-size: 1.08rem !important; line-height: 1.35 !important; }
+  p, label, [data-testid="stMarkdownContainer"] { overflow-wrap: anywhere; }
+  [data-testid="stHorizontalBlock"] { flex-direction: column !important; gap: .45rem !important; }
+  [data-testid="column"] { width: 100% !important; min-width: 100% !important; flex: 1 1 100% !important; }
+  [data-testid="stMetric"] { padding: .55rem; }
+  [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+  [data-testid="stTabs"] [role="tablist"] { gap: .25rem; overflow-x: auto; flex-wrap: nowrap; }
+  [data-testid="stTabs"] button[role="tab"] { white-space: nowrap; padding: .45rem .65rem; }
+  [data-testid="stDataFrame"], [data-testid="stTable"] { overflow-x: auto; }
+  [data-testid="stSidebar"] { min-width: 0; }
+  [data-testid="stFileUploader"] section { padding: .7rem; }
+  .stButton button, [data-testid="stDownloadButton"] button, [data-testid="stFormSubmitButton"] button { width: 100%; }
+  input, textarea { font-size: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
 </style>
 """, unsafe_allow_html=True)
 
