@@ -1305,5 +1305,3 @@ elif page == "Personal AI Agent":
 
 st.divider()
 st.caption("AutoMind AI | Python • Streamlit • Gemini • Word • PowerPoint • Excel")
-# AutoMind AI dashboard update
-
